@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
+import json
 from subprocess import call
 
 import sys
@@ -8,6 +9,7 @@ import os
 import time
 import atexit
 import signal
+import urlparse
 
 import config
 
@@ -155,11 +157,62 @@ class GitHubRequestHandler(BaseHTTPRequestHandler):
     """
     Handler
     """
-    pass
+    hooks = {}
 
+    def do_POST(self):
+        webhook = self.parse_webhook()
+        event = self.headers.getheader('X-GitHub-Event', False)
+        command = False
 
-class GitHubListener(HTTPServer):
-    pass
+        if not event or event not in self.hooks:
+            self.send_response(404)
+            return
+
+        if 'command' in self.hooks[event]:
+            command = self.hooks[event]['command']
+
+        if not command:
+            if 'repository' not in webhook or 'full_name' not in webhook['repository']:
+                self._respond(404)
+                return
+            else:
+                command = self.hooks[webhook['repository']['full_name']]['command']
+
+        try:
+            to_respond = ''
+            if callable(command):
+                to_respond = command(webhook, self.headers)
+            else:
+                call(command)
+
+            self._respond()
+            self.wfile.write(to_respond)
+            self.wfile.close()
+        except Exception as e:
+            print e
+            self._respond(500)
+
+    def get_body(self):
+        length = int(self.headers.getheader('content-length'))
+        body = self.rfile.read(length)
+        return body
+
+    def parse_webhook(self):
+        body = self.get_body()
+        try:
+            post = urlparse.parse_qs(body)
+            payload = post['payload']
+        except KeyError:
+            payload = body
+
+        payload = json.loads(payload)
+
+        return payload
+
+    def _respond(self, code=200):
+        self.send_response(code)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
 
 
 class GitHubAutoDeployDaemon(Daemon):
@@ -171,7 +224,8 @@ class GitHubAutoDeployDaemon(Daemon):
             .__init__(pidfile, stdin, stdout, stderr, working_dir)
 
     def run(self):
-        listener = GitHubListener(config.HTTP_BIND, GitHubRequestHandler)
+        GitHubRequestHandler.hooks = config.HOOKS
+        listener = HTTPServer(config.HTTP_BIND, GitHubRequestHandler)
         listener.serve_forever()
 
 

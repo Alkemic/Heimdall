@@ -10,12 +10,22 @@ STDOUT = '/dev/null'
 HTTP_BIND = ('', 9090)
 
 
-def dummy_command():
-    print 'dummy', __name__
+def dummy_command(webhook, headers):
+    print 'headers', headers
+    print 'webhook', webhook
 
-REPOS = {
-    'https://github.com/Alkemic/wkspl': {
-        'cd /home/alkemic/wkspl/',
-        dummy_command,
+
+def ping_event(webhook, headers):
+    return 'Got: %s' % webhook['zen']
+
+
+HOOKS = {
+    'push':{
+        'Alkemic/wkspl': {
+            'command': dummy_command,
+        },
+    },
+    'ping': {
+        'command': ping_event,
     },
 }
