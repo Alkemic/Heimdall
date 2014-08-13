@@ -149,8 +149,7 @@ class Daemon(object):
         You should override this method when you subclass Daemon. It will be called after the process has been
         daemonized by start() or restart().
         """
-
-        # self.listener = GitHubListener()
+        pass
 
 
 class GitHubRequestHandler(BaseHTTPRequestHandler):
@@ -178,15 +177,25 @@ class GitHubRequestHandler(BaseHTTPRequestHandler):
             else:
                 command = self.hooks[webhook['repository']['full_name']]['command']
 
+                if not isinstance(command, (tuple, list, dict, set, frozenset)):
+                    command = command,
+
         try:
             to_respond = ''
-            if callable(command):
-                to_respond = command(webhook, self.headers)
-            else:
-                call(command)
+            try:
+                if callable(command):
+                    to_respond = command(webhook, self.headers)
+                else:
+                    # It's quite insecure, but I belive whoever is using this, knows 
+                    # that using this can fuck things pretty serious
+                    for cmd in command:
+                        call(cmd, shell=True)  
 
-            self._respond()
-            self.wfile.write(to_respond)
+                self._respond()
+                self.wfile.write(to_respond)
+            except (OSError, CalledProcessError):
+                self._respond(500)
+
             self.wfile.close()
         except Exception as e:
             print e
@@ -198,6 +207,9 @@ class GitHubRequestHandler(BaseHTTPRequestHandler):
         return body
 
     def parse_webhook(self):
+        """
+        Parse request data sent from GitHub to our service and return payload
+        """
         body = self.get_body()
         try:
             post = urlparse.parse_qs(body)
@@ -216,6 +228,9 @@ class GitHubRequestHandler(BaseHTTPRequestHandler):
 
 
 class GitHubAutoDeployDaemon(Daemon):
+    """
+    Main daemon class
+    """
 
     def __init__(self, pidfile, stdin='/dev/null', stdout='/dev/null',
                  stderr='/dev/null', working_dir='/'):
@@ -224,7 +239,7 @@ class GitHubAutoDeployDaemon(Daemon):
             .__init__(pidfile, stdin, stdout, stderr, working_dir)
 
     def run(self):
-        GitHubRequestHandler.hooks = config.HOOKS
+        GitHubRequestHandler.hooks = config.HOOKS  # todo: make it more clean
         listener = HTTPServer(config.HTTP_BIND, GitHubRequestHandler)
         listener.serve_forever()
 
