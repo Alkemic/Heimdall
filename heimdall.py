@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
-from SocketServer import BaseRequestHandler
 import json
 from subprocess import call, CalledProcessError
 
@@ -44,7 +43,10 @@ class Daemon(object):
                 # exit first parent
                 sys.exit(0)
         except OSError, e:
-            sys.stderr.write("fork #1 failed: %d (%s)\n" % (e.errno, e.strerror))
+            sys.stderr.write("fork #1 failed: %d (%s)\n" % (
+                e.errno,
+                e.strerror
+            ))
             sys.exit(1)
 
         # decouple from parent environment
@@ -59,7 +61,10 @@ class Daemon(object):
                 # exit from second parent
                 sys.exit(0)
         except OSError, e:
-            sys.stderr.write("fork #2 failed: %d (%s)\n" % (e.errno, e.strerror))
+            sys.stderr.write("fork #2 failed: %d (%s)\n" % (
+                e.errno,
+                e.strerror
+            ))
             sys.exit(1)
 
             # redirect standard file descriptors
@@ -78,9 +83,11 @@ class Daemon(object):
         file(self.pidfile, 'w+').write("%s\n" % pid)
 
     def delpid(self):
+        """Deletes pidfile"""
         os.remove(self.pidfile)
 
     def get_pid(self):
+        """Returns pid"""
         try:
             pf = file(self.pidfile, 'r')
             pid = int(pf.read().strip())
@@ -96,7 +103,7 @@ class Daemon(object):
         """
         # Check for a pidfile to see if the daemon already runs
         try:
-            pf = file(self.pidfile,'r')
+            pf = file(self.pidfile, 'r')
             pid = int(pf.read().strip())
             pf.close()
         except IOError:
@@ -146,7 +153,8 @@ class Daemon(object):
 
     def run(self):
         """
-        You should override this method when you subclass Daemon. It will be called after the process has been
+        You should override this method when you subclass Daemon. It will be
+        called after the process has been
         daemonized by start() or restart().
         """
         pass
@@ -162,6 +170,7 @@ class WebHookRequestHandler(BaseHTTPRequestHandler):
 
     @property
     def webhook(self):
+        """Return hook data"""
         if self._webhook is None:
             body = self.get_body()
             try:
@@ -175,17 +184,22 @@ class WebHookRequestHandler(BaseHTTPRequestHandler):
         return self._webhook
 
     def _get_event(self):
+        """Returns information about event"""
         event = self.headers.getheader('X-GitHub-Event', False)
         if event:
             sender = 'github'
             return sender, event
 
-        if 'build_url' in self.webhook and 'travis' in self.webhook['build_url']:
+        is_travis = all((
+            'build_url' in self.webhook, 'travis' in self.webhook['build_url']
+        ))
+        if is_travis:
             event = self.webhook['type']
             sender = 'travis'
             return sender, event
 
     def _get_repository_name(self):
+        """Returns repository name"""
         try:
             return self.webhook['repository']['full_name']
         except KeyError:
@@ -202,6 +216,7 @@ class WebHookRequestHandler(BaseHTTPRequestHandler):
         return None
 
     def do_POST(self):
+        """Actually handler request"""
         sender, event = self._get_event()
         repository = self._get_repository_name()
 
@@ -224,8 +239,8 @@ class WebHookRequestHandler(BaseHTTPRequestHandler):
                 if callable(command):
                     to_respond = command(self.webhook, self.headers)
                 else:
-                    # It's quite insecure, but I belive whoever is using this, knows
-                    # that using this can fuck things pretty serious
+                    # It's quite insecure, but I believe whoever is using this,
+                    # knows that using this can fuck things pretty serious
                     for cmd in command:
                         call(cmd, shell=True)
 
@@ -241,11 +256,13 @@ class WebHookRequestHandler(BaseHTTPRequestHandler):
             self._respond(500)
 
     def get_body(self):
+        """Returns request body"""
         length = int(self.headers.getheader('content-length'))
         body = self.rfile.read(length)
         return body
 
     def _respond(self, code=200, message=None):
+        """Shortcut to make respond"""
         self.send_response(code)
         self.send_header('Content-type', 'text/plain')
         if message is not None:
@@ -254,6 +271,7 @@ class WebHookRequestHandler(BaseHTTPRequestHandler):
 
 
 def run_heimdall():
+    """Run Heimdall end-point"""
     WebHookRequestHandler.hooks = config.HOOKS  # todo: make it more clean
     listener = HTTPServer(config.HTTP_BIND, WebHookRequestHandler)
     listener.serve_forever()
@@ -271,6 +289,7 @@ class HeimdallDaemon(Daemon):
             .__init__(pidfile, stdin, stdout, stderr, working_dir)
 
     def run(self):
+        """Run"""
         run_heimdall()
 
 
@@ -284,18 +303,27 @@ def main():
     if len(sys.argv) == 2:
         if 'start' == sys.argv[1]:
             daemon.start()
-            print 'Starting daemon \'%s\', pid: %i' % (sys.argv[0], daemon.get_pid())
+            print 'Starting daemon \'%s\', pid: %i' % (
+                sys.argv[0],
+                daemon.get_pid()
+            )
         elif 'stop' == sys.argv[1]:
             daemon_pid = daemon.get_pid()
             if daemon_pid is not None:
-                print 'Stopping daemon \'%s\', pid: %i' % (sys.argv[0], daemon.get_pid())
+                print 'Stopping daemon \'%s\', pid: %i' % (
+                    sys.argv[0],
+                    daemon.get_pid()
+                )
             else:
                 print 'Error during stopping daemon!'
             daemon.stop()
         elif 'restart' == sys.argv[1]:
             daemon_pid = daemon.get_pid()
             if daemon_pid is not None:
-                print 'Restarting daemon \'%s\', pid: %i' % (sys.argv[0], daemon.get_pid())
+                print 'Restarting daemon \'%s\', pid: %i' % (
+                    sys.argv[0],
+                    daemon.get_pid()
+                )
             else:
                 print 'Error during restarting daemon!'
             daemon.restart()
