@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
+from SocketServer import BaseRequestHandler
 import json
-from subprocess import call
+from subprocess import call, CalledProcessError
 
 import sys
 import os
@@ -14,7 +15,6 @@ import urlparse
 import config
 
 __author__ = 'Daniel Alkemic Czuba <dc@danielczuba.pl>'
-
 
 
 class Daemon(object):
@@ -152,47 +152,86 @@ class Daemon(object):
         pass
 
 
-class GitHubRequestHandler(BaseHTTPRequestHandler):
+class WebHookRequestHandler(BaseHTTPRequestHandler):
     """
     Handler
     """
     hooks = {}
 
-    def do_POST(self):
-        webhook = self.parse_webhook()
+    _webhook = None
+
+    @property
+    def webhook(self):
+        if self._webhook is None:
+            body = self.get_body()
+            try:
+                post = urlparse.parse_qs(body)
+                webhook = post['payload']
+            except KeyError:
+                webhook = body
+
+            self._webhook = json.loads(webhook)
+
+        return self._webhook
+
+    def _get_event(self):
         event = self.headers.getheader('X-GitHub-Event', False)
-        command = False
+        if event:
+            sender = 'github'
+            return sender, event
 
-        if not event or event not in self.hooks:
-            self.send_response(404)
-            return
+        if 'build_url' in self.webhook and 'travis' in self.webhook['build_url']:
+            event = self.webhook['type']
+            sender = 'travis'
+            return sender, event
 
-        if 'command' in self.hooks[event]:
-            command = self.hooks[event]['command']
+    def _get_repository_name(self):
+        try:
+            return self.webhook['repository']['full_name']
+        except KeyError:
+            pass
 
-        if not command:
-            if 'repository' not in webhook or 'full_name' not in webhook['repository']:
-                self._respond(404)
+        try:
+            return "%s/%s" % (
+                self.webhook['repository']['owner_name'],
+                self.webhook['repository']['name'],
+            )
+        except KeyError:
+            pass
+
+        return None
+
+    def do_POST(self):
+        sender, event = self._get_event()
+        repository = self._get_repository_name()
+
+        try:
+            command = self.hooks[sender][event][repository]['command']
+        except KeyError:
+            try:
+                command = self.hooks[sender][event]['command']
+            except KeyError:
+                self._respond(404, 'Unknown %s:%s:%s' % (
+                    sender,
+                    event,
+                    repository,
+                ))
                 return
-            else:
-                command = self.hooks[webhook['repository']['full_name']]['command']
-
-                if not isinstance(command, (tuple, list, dict, set, frozenset)):
-                    command = command,
 
         try:
             to_respond = ''
             try:
                 if callable(command):
-                    to_respond = command(webhook, self.headers)
+                    to_respond = command(self.webhook, self.headers)
                 else:
-                    # It's quite insecure, but I belive whoever is using this, knows 
+                    # It's quite insecure, but I belive whoever is using this, knows
                     # that using this can fuck things pretty serious
                     for cmd in command:
-                        call(cmd, shell=True)  
+                        call(cmd, shell=True)
 
                 self._respond()
-                self.wfile.write(to_respond)
+                if to_respond:
+                    self.wfile.write(to_respond)
             except (OSError, CalledProcessError):
                 self._respond(500)
 
@@ -206,28 +245,21 @@ class GitHubRequestHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         return body
 
-    def parse_webhook(self):
-        """
-        Parse request data sent from GitHub to our service and return payload
-        """
-        body = self.get_body()
-        try:
-            post = urlparse.parse_qs(body)
-            payload = post['payload']
-        except KeyError:
-            payload = body
-
-        payload = json.loads(payload)
-
-        return payload
-
-    def _respond(self, code=200):
+    def _respond(self, code=200, message=None):
         self.send_response(code)
         self.send_header('Content-type', 'text/plain')
+        if message is not None:
+            self.send_header('X-Heimdall-Message', message)
         self.end_headers()
 
 
-class GitHubAutoDeployDaemon(Daemon):
+def run_heimdall():
+    WebHookRequestHandler.hooks = config.HOOKS  # todo: make it more clean
+    listener = HTTPServer(config.HTTP_BIND, WebHookRequestHandler)
+    listener.serve_forever()
+
+
+class HeimdallDaemon(Daemon):
     """
     Main daemon class
     """
@@ -235,17 +267,15 @@ class GitHubAutoDeployDaemon(Daemon):
     def __init__(self, pidfile, stdin='/dev/null', stdout='/dev/null',
                  stderr='/dev/null', working_dir='/'):
 
-        super(GitHubAutoDeployDaemon, self)\
+        super(HeimdallDaemon, self)\
             .__init__(pidfile, stdin, stdout, stderr, working_dir)
 
     def run(self):
-        GitHubRequestHandler.hooks = config.HOOKS  # todo: make it more clean
-        listener = HTTPServer(config.HTTP_BIND, GitHubRequestHandler)
-        listener.serve_forever()
+        run_heimdall()
 
 
 def main():
-    daemon = GitHubAutoDeployDaemon(
+    daemon = HeimdallDaemon(
         config.PID_FILE,
         stdout=config.STDOUT,
         stderr=config.STDERR,
@@ -275,12 +305,15 @@ def main():
                 print 'Daemon is running, pid: %i' % daemon.get_pid()
             else:
                 print 'Daemon is not running.'
+        elif 'fg' == sys.argv[1]:
+            print 'Starting in foreground'
+            run_heimdall()
         else:
             print 'Unknown command'
             sys.exit(2)
         sys.exit(0)
     else:
-        print 'usage: %s start|stop|restart|status' % sys.argv[0]
+        print 'usage: %s start|stop|restart|status|fg' % sys.argv[0]
         sys.exit(2)
 
 
