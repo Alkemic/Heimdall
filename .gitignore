@@ -53,3 +53,5 @@ coverage.xml
 docs/_build/
 .idea/
 config.py
+heimdall.log
+

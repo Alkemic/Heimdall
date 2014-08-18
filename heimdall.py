@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
+"""
+Heimdall is webhook (GitHub, Travis-CI) receiver
+"""
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 import json
 from subprocess import call, CalledProcessError
@@ -12,6 +15,8 @@ import signal
 import urlparse
 
 import config
+
+LOG = config.log
 
 __author__ = 'Daniel Alkemic Czuba <dc@danielczuba.pl>'
 
@@ -128,6 +133,7 @@ class Daemon(object):
         if not pid:
             message = "pidfile %s does not exist. Daemon not running?\n"
             sys.stderr.write(message % self.pidfile)
+            LOG.info(message)
             return  # not an error in a restart
 
         # Try killing the daemon process
@@ -173,6 +179,7 @@ class WebHookRequestHandler(BaseHTTPRequestHandler):
         """Return hook data"""
         if self._webhook is None:
             body = self.get_body()
+            LOG.debug(body)
             try:
                 post = urlparse.parse_qs(body)
                 webhook = post['payload']
@@ -191,7 +198,8 @@ class WebHookRequestHandler(BaseHTTPRequestHandler):
             return sender, event
 
         is_travis = all((
-            'build_url' in self.webhook, 'travis' in self.webhook['build_url']
+            'build_url' in self.webhook,
+            'travis' in self.webhook['build_url']
         ))
         if is_travis:
             event = self.webhook['type']
@@ -220,17 +228,21 @@ class WebHookRequestHandler(BaseHTTPRequestHandler):
         sender, event = self._get_event()
         repository = self._get_repository_name()
 
+        LOG.debug('User-Agent: %s' % self.headers.getheader('User-Agent'))
+
         try:
             command = self.hooks[sender][event][repository]['command']
         except KeyError:
             try:
                 command = self.hooks[sender][event]['command']
             except KeyError:
-                self._respond(404, 'Unknown %s:%s:%s' % (
+                message = 'Unknown %s:%s:%s' % (
                     sender,
                     event,
                     repository,
-                ))
+                )
+                self._respond(404, message)
+                LOG.info(message)
                 return
 
         try:
@@ -239,10 +251,18 @@ class WebHookRequestHandler(BaseHTTPRequestHandler):
                 if callable(command):
                     to_respond = command(self.webhook, self.headers)
                 else:
-                    # It's quite insecure, but I believe whoever is using this,
-                    # knows that using this can fuck things pretty serious
                     for cmd in command:
-                        call(cmd, shell=True)
+                        try:
+                            # It's quite insecure, but I believe whoever is
+                            # using this, knows that using this can fuck things
+                            # pretty serious
+                            call(cmd, shell=True)
+                        except CalledProcessError as e:
+                            message = 'Exception occurred during command `%s`' \
+                                      ' with message: %s' % (cmd, e.message)
+
+                            LOG.exception(message)
+                            self._respond(500, message)
 
                 self._respond()
                 if to_respond:
@@ -252,8 +272,8 @@ class WebHookRequestHandler(BaseHTTPRequestHandler):
 
             self.wfile.close()
         except Exception as e:
-            print e
-            self._respond(500)
+            LOG.exception('Exception occurred')
+            self._respond(500, 'Exception: %s' % e.message)
 
     def get_body(self):
         """Returns request body"""
